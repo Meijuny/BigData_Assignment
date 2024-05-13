@@ -2,6 +2,7 @@ library(stringr)
 library(tibble)
 library(readr)
 library(dplyr)
+library(fuzzyjoin)
 
 ##first write a function that can allow us to read the text in and transform into a data frame quickly
 ReadDebate <- function(FolderName) {
@@ -449,6 +450,130 @@ rm(Debate_Semester1, Debate_Semester2, Debate_Semester3, Debate_Semester4)
 ##Remove the accents from the names
 Debate_All$Name<-iconv(Debate_All$Name, from="UTF-8",to="ASCII//TRANSLIT")
 
+##Remove the accents from the speech
+Debate_All$Speech<-iconv(Debate_All$Speech, from="UTF-8",to="ASCII//TRANSLIT")
 
 
-write.csv(Debate_All, file="Debates_All.csv")
+
+####------------------------------------------------------------------------------------------------------
+####------------------------------------------------------------------------------------------------------
+####------------------------------------------------------------------------------------------------------
+##The following steps are to merge the Debate_All data with the candidate data which contains 
+##the district each congressman/congresswomen represent
+
+##Since the names of congressman/congresswoman will be used to merge the two datasets,
+##We will do the preparation for this 'name' identifier for merging as followings:
+
+##First, we need to transform names of congressman/congresswoman in the Debate_All data
+##to lower case
+Debate_All<-Debate_All %>%
+  mutate(Name=tolower(Name))
+
+##As Mexicans have a very long name, such as "jose gerardo rodolfo fernandez norona", 
+##We decided to make them in alphabetical order for an easier merging later (e.g. fernandez gerardo jose norona rodolfo)
+
+##First we create a function that can make each name order alphabetically 
+normalize_name <- function(name) {
+  sapply(name, function(x) {paste(sort(unlist(strsplit(x, " "))), collapse=" ")})
+  }
+
+Debate_All$NormalizedName<-normalize_name(Debate_All$Name)
+
+##Read the candidate data in:
+candidates <- read.csv("./candidates.csv") 
+
+##We will group parties into three coalitions: 
+##1. government coalition
+##2.(Main) opposition coalition
+##3.(Other) opposition coalition named MC as below
+##The rest of the parties will not have representative in the congress
+##Therefore, it is not relevant to our research question and thus, we give them NA
+candidates <- candidates %>%
+  mutate(
+    party = case_when(
+      party %in% c("PAN", "PRI", "PRD", "PAN-PRI-PRD", "PAN-PRI", "PAN-PRD", "PRI-PRD") ~ "opposition",
+      party %in% c("PVEM", "PT", "MORENA", "PES", "PVEM-PT-MORENA", "PVEM-PT", "PVEM-MORENA", "PT-MORENA") ~ "government",
+      party == "MC" ~ "MC",
+      TRUE ~ NA_character_  # Assign NA to all other values
+    )
+  )
+
+##To be able to merge with Debate_All data with the names of congressman/congresswomen, 
+##we make all the names to lower case:
+candidates <- candidates %>%
+  mutate(candidate = tolower(candidate))
+
+##Then, we also order each name alphabetically:
+candidates$NormalizedName<- normalize_name(candidates$candidate)
+
+##As the same congressman/congresswoman can be registered to multiple parties, such as 'PAN', 'PAN-PRI',
+##but after categorizing the parties into coalition, we will have a lot of duplicate values, such as:
+##Noel Mata Atlino were registered for multiple parties, but now he belongs to the same coalition 'opposition'
+
+#We need to get rid of these duplicate values as below:
+candidates <- candidates %>%
+  distinct(candidate, party, .keep_all = TRUE) 
+
+
+# remove rows where 'candidate' or 'party' is just an empty space or blank
+candidates <- candidates %>%
+  filter(candidate != " " & candidate != "", party != " " & party != "")
+
+###Now, we can merge the Debate_All data and candidate data through the identifier 'NormalizedName'
+##We will use stringdist_left_join function here as this will also match with the names with typo recorded during the debate,
+##such as 'Espinoza' instead of 'Espinosa'
+Debate_Candidate<-stringdist_left_join(Debate_All, candidates, by = "NormalizedName", method = "jw", max_dist = 0.1)
+
+##We select the columns we need:
+## select the columns of interest
+Debate_Candidate<-Debate_Candidate %>% 
+  select(NormalizedName.x, party, state, district, Speech, Date) %>% 
+  rename("name" = "NormalizedName.x")
+
+##For those who does has NA in the column of party or district or state,
+##they are from proportional representative, which means that they are not representing any district
+##Therefore, we will not include them in our analysis since it's not relevant to our research question:
+Debate_Candidate<-na.omit(Debate_Candidate)
+
+##Next, we need to create the identifier for each district:
+Debate_Candidate<-Debate_Candidate %>% 
+  mutate(state_district=paste(state, district, sep = "-"))  
+
+##Validation!!!!!
+##We first construct a list with district and the corresponding congressman/congresswoman
+##For the district with two representatives, one of the representative is coming from proportional representative list
+##This means that this congressman/congresswoman is not really representing this district
+##Therefore, we need delete them from our data.
+
+##The list with district and the corresponding congressman/congresswoman is as follows:
+District_Representative<-Debate_Candidate %>%
+  group_by(state_district, name) %>%
+  summarise(count=n())
+
+##The names of the congressman/congresswoman that was from the proportional representation are:
+##chavez hector ruiz, acevedo diaz edna gisel, banez julieta mejia, arturo cruz gonzalez luis
+##aguilar angelo kevin pina, gamboa miner pablo, chertorivski salomon woldenberg, castro cynthia iliana lope
+##We will delete them from our data:
+Debate_Candidate<-Debate_Candidate %>%
+  filter(name!="chavez hector ruiz" & name!="acevedo diaz edna gisel" & name!="ibanez julieta mejia" & 
+           name!="arturo cruz gonzalez luis" & 
+           name!="gamboa miner pablo" & name!="chertorivski salomon woldenberg" & name!="chertorivsky salomon woldenberg" &  
+           name!="castro cynthia iliana lopez" & name!="castro galarza yesenia" & name!="flores gerardo pena")
+
+
+####-----------------------------------------------------------------------------------------
+##To merge with this Debate_Candidate data with the election results:
+##First, we read the election results in:
+electoral_results <- read.csv("./electoral_results.csv")
+
+##We use the column 'state_district' as identifier to merge Debate_Candidate data and electoral_results data
+Debate_Candidate_Election<-left_join(Debate_Candidate, electoral_results,
+                                     by="state_district")
+
+##Next, we select the columns we need:
+Debate_Candidate_Election<-Debate_Candidate_Election %>%
+  select(name, party, state_district, Speech, Date, VOTE_SHARE_RULING)
+
+##Clear the environment to have just the Debate_Candidate_Election Data
+rm(list=c("candidates","Debate_All","Debate_Candidate","District_Representative",
+          "electoral_results","normalize_name","ReadDebate"))
