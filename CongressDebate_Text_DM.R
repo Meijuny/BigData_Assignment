@@ -4,6 +4,12 @@ library(readr)
 library(dplyr)
 library(fuzzyjoin)
 
+##First copy the below folder from the "BigData_Assignment" Zip
+##"CongressDebate_semester1", "CongressDebate_semester2", "CongressDebate_semester3", "CongressDebate_semester4"
+#and the below CSV files from the "BigData_Assignment" Zip into the working directory 
+##"candidates.csv", "electoral_results.csv", 
+##"semester1 id_date.csv", "semester2 id_date.csv", "semester3 id_date.csv", "semester4 id_date.csv"
+
 ##first write a function that can allow us to read the text in and transform into a data frame quickly
 ReadDebate <- function(FolderName) {
   files <- list.files(FolderName, full.names = TRUE)
@@ -491,9 +497,8 @@ candidates <- read.csv("./candidates.csv")
 candidates <- candidates %>%
   mutate(
     party = case_when(
-      party %in% c("PAN", "PRI", "PRD", "PAN-PRI-PRD", "PAN-PRI", "PAN-PRD", "PRI-PRD") ~ "opposition",
+      party %in% c("PAN", "PRI", "PRD", "PAN-PRI-PRD", "PAN-PRI", "PAN-PRD", "PRI-PRD", "MC") ~ "opposition",
       party %in% c("PVEM", "PT", "MORENA", "PES", "PVEM-PT-MORENA", "PVEM-PT", "PVEM-MORENA", "PT-MORENA") ~ "government",
-      party == "MC" ~ "MC",
       TRUE ~ NA_character_  # Assign NA to all other values
     )
   )
@@ -577,3 +582,13 @@ Debate_Candidate_Election<-Debate_Candidate_Election %>%
 ##Clear the environment to have just the Debate_Candidate_Election Data
 rm(list=c("candidates","Debate_All","Debate_Candidate","District_Representative",
           "electoral_results","normalize_name","ReadDebate"))
+
+
+####--------------------------------------------------------------------------------------------------------------------------------
+##Set up doc_id for the LDA:
+Debate_Candidate_Election<-Debate_Candidate_Election %>%
+  rownames_to_column()
+colnames(Debate_Candidate_Election)[1]<-"doc_id"
+
+##Change the column name "speech" to "text" for R to recognize when making the DTM
+colnames(Debate_Candidate_Election)[5]<-"text"
